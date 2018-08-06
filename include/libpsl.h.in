@@ -40,6 +40,10 @@
 #define PSL_VERSION_PATCH @LIBPSL_VERSION_PATCH@
 #define PSL_VERSION_NUMBER @LIBPSL_VERSION_NUMBER@
 
+#if @PSL_STATIC@
+#  define PSL_STATIC
+#endif
+
 #ifndef PSL_API
 #if defined BUILDING_PSL && HAVE_VISIBILITY
 #  define PSL_API __attribute__ ((__visibility__("default")))
