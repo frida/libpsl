@@ -61,6 +61,10 @@
 
 # include <winsock2.h>
 # include <ws2tcpip.h>
+
+# ifdef _MSC_VER
+   typedef SSIZE_T ssize_t;
+# endif
 #else
 # include <sys/socket.h>
 # include <netinet/in.h>
