@@ -1,22 +1,32 @@
-suffixes_dafsa = custom_target('suffixes-dafsa',
-  input : psl_file,
-  output : 'suffixes_dafsa.inc',
-  command : [python3, files('psl-make-dafsa'), '--output-format=cxx+', '@INPUT@', '@OUTPUT@']
-)
+psl_make_dafsa = find_program('psl-make-dafsa')
 
-psl_sources = [
-  'psl.c',
+suffixes_dafsa_h = custom_target('suffixes_dafsa.h',
+  input : psl_file,
+  output : 'suffixes_dafsa.h',
+  command : [python, psl_make_dafsa, '--output-format=cxx+', '@INPUT@', '@OUTPUT@'])
+
+sources = [
   'lookup_string_in_fixed_set.c',
-  suffixes_dafsa
+  'psl.c',
 ]
 
-libpsl = library('psl', psl_sources,
-  include_directories : [config_inc, header_inc],
-  install : true
+cargs = [
+  '-DHAVE_CONFIG_H',
+  '-DBUILDING_PSL',
+  '-DPSL_DISTFILE="@0@"'.format(psl_distfile),
+]
+
+libpsl = library('psl', sources, suffixes_dafsa_h,
+  include_directories : [configinc, includedir],
+  c_args : cargs,
+  dependencies : [libidn2_dep, libidn_dep, libicu_dep, libunistring, networking_deps],
+  version: lt_version,
+  install: true,
 )
 
-pkg = import('pkgconfig')
-pkg.generate(name: meson.project_name(),
-  description: 'Public Suffix List C library',
-  libraries: [libpsl]
-)
+pkgconfig.generate(libpsl,
+  name : 'libpsl',
+  description : 'Public Suffix List C library')
+
+libpsl_dep = declare_dependency(link_with : libpsl,
+  include_directories : includedir)

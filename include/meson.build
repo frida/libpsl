@@ -1,12 +1,26 @@
-header_conf = configuration_data()
-header_conf.set('LIBPSL_VERSION', psl_version)
-header_conf.set('LIBPSL_VERSION_MAJOR', psl_version_major)
-header_conf.set('LIBPSL_VERSION_MINOR', psl_version_minor)
-header_conf.set('LIBPSL_VERSION_PATCH', psl_version_patch)
-header_conf.set('LIBPSL_VERSION_NUMBER', psl_version_number)
-header_conf.set10('PSL_STATIC', get_option('default_library') == 'static')
+version = meson.project_version()
+version_arr = version.split('.')
+major = version_arr[0].to_int()
+minor = version_arr[1].to_int()
+patch = version_arr[2].to_int()
 
-configure_file(input : 'libpsl.h.in',
+cdata = configuration_data()
+cdata.set('LIBPSL_VERSION', version)
+cdata.set('LIBPSL_VERSION_MAJOR', major)
+cdata.set('LIBPSL_VERSION_MINOR', minor)
+cdata.set('LIBPSL_VERSION_PATCH', patch)
+
+hex = '0123456789abcdef'
+ver = '0x@0@@1@@2@@3@@4@@5@'
+cdata.set('LIBPSL_VERSION_NUMBER',
+  ver.format(
+    hex[major / 16], hex[major % 16],
+    hex[minor / 16], hex[minor % 16],
+    hex[patch / 16], hex[patch % 16]))
+
+libpsl_h = configure_file(
+  input : 'libpsl.h.in',
   output : 'libpsl.h',
-  configuration : header_conf,
-  install_dir : get_option('includedir'))
+  configuration : cdata)
+
+install_headers(libpsl_h)
