@@ -157,5 +157,7 @@ endif
 subdir('include')
 subdir('src')
 subdir('tools')
-subdir('tests')
-subdir('fuzz')
+if get_option('tests')
+  subdir('tests')
+  subdir('fuzz')
+endif
