@@ -15,6 +15,9 @@ option('psl_file', type : 'string', value : '',
 option('psl_testfile', type : 'string', value : '',
   description : 'path to PSL test file')
 
+option('tests', type : 'boolean', value : true,
+  description : 'build tests')
+
 option('docs', type: 'boolean', value: false,
   description: 'Build the API reference (requires gtk-doc)')
 
