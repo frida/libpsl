@@ -19,7 +19,7 @@ cargs = [
 libpsl = library('psl', sources, suffixes_dafsa_h,
   include_directories : [configinc, includedir],
   c_args : cargs,
-  dependencies : [libidn2_dep, libidn_dep, libicu_dep, libunistring, networking_deps],
+  dependencies : [libidn2_dep, libidn_dep, libicu_dep, libunistring, networking_deps, libiconv_dep],
   version: lt_version,
   install: true,
 )
@@ -31,4 +31,5 @@ pkgconfig.generate(libpsl,
 libpsl_dep = declare_dependency(link_with : libpsl,
   include_directories : includedir)
 
+install_data('psl-make-dafsa', install_dir : get_option('bindir'))
 install_man('psl-make-dafsa.1')
