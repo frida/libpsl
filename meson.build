@@ -1,6 +1,6 @@
 project('libpsl', 'c',
   version : '0.21.1',
-  meson_version : '>=0.47.0')
+  meson_version : '>=0.54.0')
 
 # Derived from LIBPSL_SO_VERSION in configure.ac
 lt_version = '5.3.2'
