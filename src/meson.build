@@ -31,5 +31,7 @@ pkgconfig.generate(libpsl,
 libpsl_dep = declare_dependency(link_with : libpsl,
   include_directories : includedir)
 
+meson.override_dependency('libpsl', libpsl_dep)
+
 install_data('psl-make-dafsa', install_dir : get_option('bindir'))
 install_man('psl-make-dafsa.1')
