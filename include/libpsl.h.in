@@ -45,10 +45,6 @@
 #  define __has_declspec_attribute(x) 0
 #endif
 
-#if @LIBPSL_STATIC@
-#  define PSL_STATIC
-#endif
-
 #ifndef PSL_API
 #if defined BUILDING_PSL && HAVE_VISIBILITY
 #  define PSL_API __attribute__ ((__visibility__("default")))

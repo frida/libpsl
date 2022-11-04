@@ -9,7 +9,6 @@ cdata.set('LIBPSL_VERSION', version)
 cdata.set('LIBPSL_VERSION_MAJOR', major)
 cdata.set('LIBPSL_VERSION_MINOR', minor)
 cdata.set('LIBPSL_VERSION_PATCH', patch)
-cdata.set10('LIBPSL_STATIC', get_option('default_library') == 'static')
 
 hex = '0123456789abcdef'
 ver = '0x@0@@1@@2@@3@@4@@5@'

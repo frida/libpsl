@@ -1,5 +1,4 @@
-
-AC_INIT([libpsl], [0.21.1], [tim.ruehsen@gmx.de], [libpsl], [https://github.com/rockdaboot/libpsl])
+AC_INIT([libpsl],[m4_normalize(m4_include(version.txt))],[tim.ruehsen@gmx.de],[libpsl],[https://github.com/rockdaboot/libpsl])
 AC_PREREQ([2.59])
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE([1.10 no-define foreign dist-lzip])
@@ -28,14 +27,14 @@ AC_SUBST([LIBPSL_VERSION_MAJOR], [`echo $VERSION|cut -d'.' -f1`])
 AC_SUBST([LIBPSL_VERSION_MINOR], [`echo $VERSION|cut -d'.' -f2`])
 AC_SUBST([LIBPSL_VERSION_PATCH], [`echo $VERSION|cut -d'.' -f3`])
 AC_SUBST([LIBPSL_VERSION_NUMBER], [`printf '0x%02x%02x%02x' $LIBPSL_VERSION_MAJOR $LIBPSL_VERSION_MINOR $LIBPSL_VERSION_PATCH`])
-AC_SUBST([LIBPSL_STATIC], [0])
 AC_CONFIG_FILES([include/libpsl.h])
 
 #
 # Gettext
 #
 AM_GNU_GETTEXT([external],[need-ngettext])
-AM_GNU_GETTEXT_VERSION([0.18.1])
+AM_GNU_GETTEXT_VERSION([0.19.3])
+AM_GNU_GETTEXT_REQUIRE_VERSION([0.19.3])
 
 #
 # check for gtk-doc
@@ -75,6 +74,14 @@ AM_PATH_PYTHON([2.7])
 
 PKG_PROG_PKG_CONFIG
 
+AC_ARG_ENABLE([fuzzing],
+  [AS_HELP_STRING([--enable-fuzzing], [Turn on fuzzing build (for developers)])],
+  [enable_fuzzing=yes;
+   AC_SUBST([LIB_FUZZING_ENGINE])
+   AC_DEFINE([FUZZING], 1, [Define to 1 if this is a fuzzing build])
+  ], [enable_fuzzing=no; LIB_FUZZING_ENGINE=""])
+AM_CONDITIONAL([FUZZING], [test "$enable_fuzzing" = "yes"])
+
 AC_ARG_ENABLE([cfi],
   [AS_HELP_STRING([--enable-cfi], [Turn on clang's Control Flow Integrity (CFI)])],
   [
@@ -92,6 +99,7 @@ AC_ARG_ENABLE([ubsan],
   [AS_HELP_STRING([--enable-ubsan], [Turn on Undefined Behavior Sanitizer (UBSan)])],
   [
     if test "$enable_ubsan" = yes; then
+      # Set basic UBSAN compiler flags. Add your own to CFLAGS.
       CFLAGS=$CFLAGS" -fsanitize=undefined -fno-sanitize-recover=undefined"
     fi
   ], [ enable_ubsan=no ])
@@ -100,6 +108,7 @@ AC_ARG_ENABLE([asan],
   [AS_HELP_STRING([--enable-asan], [Turn on Address Sanitizer (ASan)])],
   [
     if test "$enable_asan" = yes; then
+      # Set basic ASAN compiler flags. Add your own to CFLAGS.
       CFLAGS=$CFLAGS" -fsanitize=address -fno-omit-frame-pointer"
       AX_CHECK_COMPILE_FLAG([-fsanitize-address-use-after-scope], [CFLAGS="$CFLAGS -fsanitize-address-use-after-scope"])
     fi
@@ -116,7 +125,7 @@ AC_ARG_ENABLE([asan],
 # 4. If any interfaces have been added, removed, or changed since the last update, increment current, and set revision to 0.
 # 5. If any interfaces have been added since the last public release, then increment age.
 # 6. If any existing interfaces have been removed or changed since the last public release, then set age to 0. 
-AC_SUBST([LIBPSL_SO_VERSION], [8:3:3])
+AC_SUBST([LIBPSL_SO_VERSION], m4_normalize(m4_include([libtool_version_info.txt])))
 AC_SUBST([LIBPSL_VERSION], $VERSION)
 
 # Check for enable/disable runtime PSL data
@@ -151,22 +160,14 @@ AC_ARG_ENABLE(runtime,
 # Check for enable/disable builtin PSL data
 AC_ARG_ENABLE(builtin,
   [
-  --enable-builtin[[=IDNA library]]
-      Specify the IDNA library used for built-in data generation:
-        libidn2 [[default]]: IDNA2008 library (also needs libunistring)
-        libicu: IDNA2008   UTS#46 library
-        libidn:            IDNA2003 library (also needs libunistring)
+  --enable-builtin         Generate built-in PSL data
   --disable-builtin        Do not generate built-in PSL data
   ], [
-    if test "$enableval" = "libidn2" -o "$enableval" = "yes"; then
-      enable_builtin=libidn2
-      AC_DEFINE([BUILTIN_GENERATOR_LIBIDN2], [1], [generate PSL data using libidn2])
-    elif test "$enableval" = "libicu"; then
-      enable_builtin=libicu
-      AC_DEFINE([BUILTIN_GENERATOR_LIBICU], [1], [generate PSL data using libicu])
-    elif test "$enableval" = "libidn"; then
-      enable_builtin=libidn
-      AC_DEFINE([BUILTIN_GENERATOR_LIBIDN], [1], [generate PSL data using libidn])
+    if test "$enableval" = "yes"; then
+      enable_builtin=yes
+    elif test "$enableval" = "libidn" -o "$enableval" = "libidn2" -o "$enableval" = "libicu"; then
+      AC_MSG_WARN([--enable-builtin=$enableval is deprecated, use --enable-builtin (enabled by default)])
+      enable_builtin=yes
     elif test "$enableval" = "no"; then
       enable_builtin=no
     else
@@ -174,10 +175,14 @@ AC_ARG_ENABLE(builtin,
     fi
   ], [
     # this is the default if neither --enable-builtin nor --disable-builtin were specified
-    enable_builtin=auto
+    enable_builtin=yes
   ])
 
-if test "$enable_runtime" = "libidn2" -o "$enable_builtin" = "libidn2" -o "$enable_runtime" = "auto" -o "$enable_builtin" = "auto"; then
+if test "$enable_builtin" = "yes"; then
+  AC_DEFINE([ENABLE_BUILTIN], [1], [Generate built-in PSL data])
+fi
+
+if test "$enable_runtime" = "libidn2" -o "$enable_runtime" = "auto"; then
   # Check for libidn2
   PKG_CHECK_MODULES([LIBIDN2], [libidn2], [
     HAVE_LIBIDN2=yes
@@ -188,7 +193,7 @@ if test "$enable_runtime" = "libidn2" -o "$enable_builtin" = "libidn2" -o "$enab
   ], [
     AC_SEARCH_LIBS(idn2_lookup_u8, idn2, HAVE_LIBIDN2=yes,
     [
-       if test "$enable_runtime" = "libidn2" -o "$enable_builtin" = "libidn2"; then
+       if test "$enable_runtime" = "libidn2"; then
           AC_MSG_ERROR(You requested libidn2 but it is not installed.)
        fi
     ], -lunistring)
@@ -199,14 +204,10 @@ if test "$enable_runtime" = "libidn2" -o "$enable_builtin" = "libidn2" -o "$enab
       enable_runtime=libidn2
       AC_DEFINE([WITH_LIBIDN2], [1], [generate PSL data using libidn2])
     fi
-    if test "$enable_builtin" = "auto"; then
-      enable_builtin=libidn2
-      AC_DEFINE([BUILTIN_GENERATOR_LIBIDN2], [1], [generate PSL data using libidn2])
-    fi
   fi
 fi
 
-if test "$enable_runtime" = "libicu" -o "$enable_builtin" = "libicu" -o "$enable_runtime" = "auto" -o "$enable_builtin" = "auto"; then
+if test "$enable_runtime" = "libicu" -o "$enable_runtime" = "auto"; then
   # Check for libicu
   # using pkg-config won't work on older systems like Ubuntu 12.04 LTS Server Edition 64bit
   # using AC_SEARCH_LIBS also don't work since functions have the library version appended
@@ -226,7 +227,7 @@ if test "$enable_runtime" = "libicu" -o "$enable_builtin" = "libicu" -o "$enable
         [[u_strToUTF8(NULL, 0, NULL, NULL, 0, NULL);]])],
       [HAVE_LIBICU=yes; LIBICU_LIBS="-licuuc"; AC_MSG_RESULT([yes])],
       [ AC_MSG_RESULT([no]);
-        if test "$enable_runtime" = "libicu" -o "$enable_builtin" = "libicu"; then
+        if test "$enable_runtime" = "libicu"; then
           AC_MSG_ERROR(You requested libicu but it is not installed.)
         fi
         LIBS=$OLDLIBS
@@ -238,14 +239,10 @@ if test "$enable_runtime" = "libicu" -o "$enable_builtin" = "libicu" -o "$enable
       enable_runtime=libicu
       AC_DEFINE([WITH_LIBICU], [1], [generate PSL data using libicu])
     fi
-    if test "$enable_builtin" = "auto"; then
-      enable_builtin=libicu
-      AC_DEFINE([BUILTIN_GENERATOR_LIBICU], [1], [generate PSL data using libicu])
-    fi
   fi
 fi
 
-if test "$enable_runtime" = "libidn" -o "$enable_builtin" = "libidn" -o "$enable_runtime" = "auto" -o "$enable_builtin" = "auto"; then
+if test "$enable_runtime" = "libidn" -o "$enable_runtime" = "auto"; then
   # Check for libidn
   PKG_CHECK_MODULES([LIBIDN], [libidn], [
     HAVE_LIBIDN=yes
@@ -256,7 +253,7 @@ if test "$enable_runtime" = "libidn" -o "$enable_builtin" = "libidn" -o "$enable
   ], [
     AC_SEARCH_LIBS(idna_to_ascii_8z, idn, HAVE_LIBIDN=yes,
     [
-      if test "$enable_runtime" = "libidn" -o "$enable_builtin" = "libidn"; then
+      if test "$enable_runtime" = "libidn"; then
         AC_MSG_ERROR(You requested libidn but it is not installed.)
       fi
     ])
@@ -267,19 +264,12 @@ if test "$enable_runtime" = "libidn" -o "$enable_builtin" = "libidn" -o "$enable
       enable_runtime=libidn
       AC_DEFINE([WITH_LIBIDN], [1], [generate PSL data using libidn])
     fi
-    if test "$enable_builtin" = "auto"; then
-      enable_builtin=libidn
-      AC_DEFINE([BUILTIN_GENERATOR_LIBIDN], [1], [generate PSL data using libidn])
-    fi
   fi
 fi
 
 # last fallback is noruntime/nobuiltin
 if test "$enable_runtime" = "auto"; then
   enable_runtime=no
-fi
-if test "$enable_builtin" = "auto"; then
-  enable_builtin=no
 fi
 
 if test "x$HAVE_LIBIDN2" = "xyes" -o "x$HAVE_LIBIDN" = "xyes"; then
@@ -294,10 +284,7 @@ AM_ICONV
 AM_CONDITIONAL([WITH_LIBICU], test "x$enable_runtime" = "xlibicu")
 AM_CONDITIONAL([WITH_LIBIDN2], test "x$enable_runtime" = "xlibidn2")
 AM_CONDITIONAL([WITH_LIBIDN], test "x$enable_runtime" = "xlibidn")
-AM_CONDITIONAL([BUILTIN_GENERATOR_LIBICU], test "x$enable_builtin" = "xlibicu")
-AM_CONDITIONAL([BUILTIN_GENERATOR_LIBIDN2], test "x$enable_builtin" = "xlibidn2")
-AM_CONDITIONAL([BUILTIN_GENERATOR_LIBIDN], test "x$enable_builtin" = "xlibidn")
-AM_CONDITIONAL([WITH_BUILTIN], test $enable_builtin = yes)
+AM_CONDITIONAL([ENABLE_BUILTIN], test "x$enable_builtin" = "xyes")
 
 # Solaris has socket in libsocket and inet_ntop in libnsl, but also needs libsocket, so the order is important here
 AC_CHECK_LIB([socket], [socket], [NEEDS_SOCKET=yes], [])
@@ -388,7 +375,6 @@ AC_CONFIG_FILES([Makefile
                  tests/Makefile
                  docs/libpsl/Makefile docs/libpsl/version.xml
                  libpsl.pc:libpsl.pc.in
-                 meson.build
                  msvc/Makefile
                  msvc/config.h.win32
                  msvc/config-msvc.mak])
@@ -412,4 +398,5 @@ AC_MSG_NOTICE([Summary of build options:
   Docs:              $enable_gtk_doc
   Man pages:         $enable_man
   Tests:             ${TESTS_INFO}
+  Fuzzing build:     $enable_fuzzing, $LIB_FUZZING_ENGINE
 ])
