@@ -1,5 +1,5 @@
 option('runtime', type : 'combo',
-  choices : ['libidn2', 'libicu', 'libidn', 'no', 'auto'], value : 'auto',
+  choices : ['libidn2', 'libicu', 'libicucore', 'libicu-win', 'libidn', 'no', 'auto'], value : 'auto',
   description : 'Specify the IDNA library used for libpsl run-time conversions')
 
 option('builtin', type : 'boolean',
@@ -15,8 +15,8 @@ option('psl_file', type : 'string', value : '',
 option('psl_testfile', type : 'string', value : '',
   description : 'path to PSL test file')
 
-option('tests', type : 'boolean', value : true,
-  description : 'build tests')
-
 option('docs', type: 'boolean', value: false,
   description: 'Build the API reference (requires gtk-doc)')
+
+option('tests', type: 'boolean', value: true,
+  description: 'Build the tests and fuzzers')

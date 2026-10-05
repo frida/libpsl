@@ -1,30 +1,11 @@
 /*
- * Copyright(c) 2014-2018 Tim Ruehsen
+ * SPDX-License-Identifier: MIT
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * See the LICENSE file in the root directory for details and copyrights.
  *
  * This file is part of libpsl.
  *
  * Using the libpsl functions via command line
- *
- * Changelog
- * 11.04.2014  Tim Ruehsen  created
  *
  */
 
@@ -37,13 +18,25 @@
 #endif
 
 #ifdef _WIN32
-# include <winsock2.h> // WSAStartup, WSACleanup
+/* Windows does not have localtime_r but has localtime_s, which is more or less
+   the same except that the arguments are reversed. */
+# define LOCALTIME_R_SUCCESSFUL(t_sec, t_now)	\
+	(localtime_s(t_now, t_sec) == 0)
+#else
+# include <time.h>
+# if ! HAVE_DECL_LOCALTIME_R
+struct tm *localtime_r(const time_t *, struct tm *);
+#endif
+
+# define LOCALTIME_R_SUCCESSFUL(t_sec, t_now)	\
+	(localtime_r(t_sec, t_now) != NULL)
 #endif
 
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <locale.h>
+#include <time.h>
 
 #include <libpsl.h>
 
@@ -70,27 +63,16 @@ static void usage(int err, FILE* f)
 	exit(err);
 }
 
-static void init_windows(void) {
-#ifdef _WIN32
-	WSADATA wsa_data;
-	int err;
-
-	if ((err = WSAStartup(MAKEWORD(2,2), &wsa_data))) {
-		printf("WSAStartup failed with error: %d\n", err);
-		exit(EXIT_FAILURE);
-	}
-
-	atexit((void (__cdecl*)(void)) WSACleanup);
-#endif
-}
-
 /* RFC 2822-compliant date format */
 static const char *time2str(time_t t)
 {
 	static char buf[64];
-	struct tm *tp = localtime(&t);
+	struct tm tm;
 
-	strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S %Z", tp);
+	if (LOCALTIME_R_SUCCESSFUL(&t, &tm))
+		strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S %Z", &tm);
+	else
+		strcpy(buf, "--notime--");
 	return buf;
 }
 
@@ -160,7 +142,7 @@ int main(int argc, const char *const *argv)
 				printf("psl %s (0x%06x)\n", PACKAGE_VERSION, psl_check_version_number(0));
 				printf("libpsl %s\n", psl_get_version());
 				printf("\n");
-				printf("Copyright (C) 2014-2018 Tim Ruehsen\n");
+				printf("Copyright (C) Tim Ruehsen and Libpsl Contributors\n");
 				printf("License: MIT\n");
 				exit(0);
 			}
@@ -227,8 +209,6 @@ int main(int argc, const char *const *argv)
 				else if (mode == 4) {
 					char *cookie_domain_lower;
 
-					init_windows();
-
 					if ((rc = psl_str_to_utf8lower(domain, NULL, NULL, &cookie_domain_lower)) == PSL_SUCCESS) {
 						if (!batch_mode)
 							printf("%s: ", domain);
@@ -273,8 +253,6 @@ int main(int argc, const char *const *argv)
 		}
 	}
 	else if (mode == 4) {
-		init_windows();
-
 		for (; arg < argv + argc; arg++) {
 			if (!batch_mode)
 				printf("%s: ", *arg);

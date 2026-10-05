@@ -1,0 +1,82 @@
+name: libpsl
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      max-parallel: 3
+      matrix:
+        include:
+          - runtime: libidn
+            os: ubuntu-latest
+          - runtime: libidn2
+            os: ubuntu-latest
+          - runtime: libicu
+            os: ubuntu-latest
+          - runtime: libicucore
+            os: macos-latest
+    steps:
+    - name: Check out
+      uses: actions/checkout@v7
+    - name: Install dependencies
+      run: |
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          brew install autoconf automake gtk-doc libtool lzip
+          echo "am_cv_func_iconv_works=yes" >> $GITHUB_ENV # Use system libiconv on macOS
+          echo "XML_CATALOG_FILES=$(brew --prefix)/etc/xml/catalog" >> $GITHUB_ENV
+        else
+          sudo apt-get install -y autopoint autoconf automake gtk-doc-tools libidn2-dev libunistring-dev libicu-dev libidn-dev lzip
+        fi
+    - name: Test with ${{matrix.runtime}}
+      run: |
+          ./autogen.sh
+          CFLAGS="-O0 -Wall -Wextra" ./configure --enable-asan --enable-ubsan --enable-runtime=${{matrix.runtime}}
+          make check
+          make distcheck
+          # Test out-of-tree build
+          make maintainer-clean
+          mkdir vpath && cd vpath
+          CFLAGS="-O0 -Wall -Wextra" ../configure --enable-runtime=${{matrix.runtime}}
+          make check
+  meson-test:
+    name: Meson Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      max-parallel: 3
+      matrix:
+        os: ['ubuntu-latest', 'macos-latest']
+        include:
+          - os: 'windows-latest'
+            extra_meson_args: '--vsenv'
+    steps:
+    - name: Check out
+      uses: actions/checkout@v7
+      with:
+        submodules: true
+    - name: Install dependencies
+      run: pip install --pre meson ninja
+    - name: Install libunistring (macOS)
+      if: runner.os == 'macOS'
+      run: brew install libunistring
+    - name: Set Homebrew paths (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+        echo "LIBRARY_PATH=$(brew --prefix)/lib:$LIBRARY_PATH" >> $GITHUB_ENV
+        echo "CPATH=$(brew --prefix)/include:$CPATH" >> $GITHUB_ENV
+    - name: Configure
+      run: meson setup builddir ${{matrix.extra_meson_args}}
+    - name: Build
+      run: meson compile -C builddir
+    - name: Test
+      run: meson test -C builddir --print-errorlogs

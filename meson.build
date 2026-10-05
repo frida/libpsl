@@ -3,6 +3,7 @@ project('libpsl', 'c',
   meson_version : '>=0.60.0')
 
 cc = meson.get_compiler('c')
+build_cc = meson.get_compiler('c', native : true)
 
 enable_runtime = get_option('runtime')
 enable_builtin = get_option('builtin')
@@ -14,12 +15,36 @@ buildtype = get_option('buildtype')
 notfound = dependency('', required : false)
 libidn2_dep = notfound
 libicu_dep = notfound
+libicucore_dep = notfound
+libicu_win_dep = notfound
 libidn_dep = notfound
 libunistring = notfound
 networking_deps = notfound
 libiconv_dep = notfound
 
 link_language = 'c'
+
+if enable_runtime == 'libicucore' or (host_machine.system() == 'darwin' and enable_runtime == 'auto')
+  libicucore_dep = cc.find_library('icucore', has_headers : ['unicode/uidna.h'], required : false)
+  if libicucore_dep.found()
+    if enable_runtime == 'auto'
+      enable_runtime = 'libicucore'
+    endif
+  elif enable_runtime == 'libicucore'
+    error('You requested libicucore but it is not available.')
+  endif
+endif
+
+if enable_runtime == 'libicu-win' or (host_machine.system() == 'windows' and enable_runtime == 'auto')
+  libicu_win_dep = cc.find_library('icu', has_headers : ['icu.h'], required: false)
+  if libicu_win_dep.found()
+    if enable_runtime == 'auto'
+      enable_runtime = 'libicu-win'
+    endif
+  elif enable_runtime == 'libicu-win'
+    error('You requested libicu-win but it is not available.')
+  endif
+endif
 
 # FIXME: Cleanup this when Meson gets 'feature-combo':
 # https://github.com/mesonbuild/meson/issues/4566
@@ -40,17 +65,9 @@ if ['libidn2', 'auto'].contains(enable_runtime)
 endif
 
 if ['libicu', 'auto'].contains(enable_runtime)
-  libicu_dep = dependency('icu-uc', required : false)
-  if not libicu_dep.found() and cc.has_header('unicode/ustring.h')
-    # MSVC: the debug configuration of ICU generated the libraries with d suffix
-    # we must handle this and search for the right library depending on the
-    # build type. Note debugoptimized is just a release build with .pdb files enabled
-    if cc.get_id() == 'msvc' and buildtype == 'debug'
-      libicu_dep = cc.find_library('icuucd', required : false)
-    else
-      libicu_dep = cc.find_library('icuuc', required : false)
-    endif
-  endif
+  libicu_dep = dependency('icu-uc', 'ICU',
+                          components: 'uc',
+                          required : false)
   if libicu_dep.found()
     if enable_runtime == 'auto'
       enable_runtime = 'libicu'
@@ -79,9 +96,11 @@ if ['libidn', 'auto'].contains(enable_runtime)
   endif
 endif
 
-if libidn2_dep.found() or libidn_dep.found()
-  # Check for libunistring, we need it for psl_str_to_utf8lower()
-  libunistring = cc.find_library('unistring')
+if libidn2_dep.found() or libidn_dep.found() or libicucore_dep.found()
+  if not libicucore_dep.found()
+    # Check for libunistring, we need it for psl_str_to_utf8lower()
+    libunistring = cc.find_library('unistring')
+  endif
   libiconv_dep = dependency('iconv')
 endif
 
@@ -97,17 +116,19 @@ config = configuration_data()
 config.set_quoted('PACKAGE_VERSION', meson.project_version())
 config.set('WITH_LIBIDN2', enable_runtime == 'libidn2')
 config.set('WITH_LIBICU', enable_runtime == 'libicu')
+config.set('WITH_LIBICUCORE', enable_runtime == 'libicucore')
+config.set('WITH_LIBICU_WIN', enable_runtime == 'libicu-win')
 config.set('WITH_LIBIDN', enable_runtime == 'libidn')
 config.set('ENABLE_BUILTIN', enable_builtin)
 config.set('HAVE_UNISTD_H', cc.check_header('unistd.h'))
 config.set('HAVE_STDINT_H', cc.check_header('stdint.h'))
-config.set('HAVE_ALLOCA_H', cc.check_header('alloca.h'))
 config.set('HAVE_DIRENT_H', cc.check_header('dirent.h'))
-config.set('HAVE_ALLOCA', cc.has_function('alloca'))
-config.set('HAVE_STRNDUP', cc.has_function('strndup'))
 config.set('HAVE_CLOCK_GETTIME', cc.has_function('clock_gettime'))
 config.set('HAVE_FMEMOPEN', cc.has_function('fmemopen'))
 config.set('HAVE_NL_LANGINFO', cc.has_function('nl_langinfo'))
+if cc.has_function_attribute('visibility')
+  config.set('HAVE_VISIBILITY', 1)
+endif
 configure_file(output : 'config.h', configuration : config)
 
 configinc = include_directories('.')
@@ -123,7 +144,11 @@ if psl_test_file == ''
   psl_test_file = join_paths(meson.current_source_dir(), 'list', 'tests', 'tests.txt')
 endif
 
-python = import('python').find_installation()
+python = find_program('python3', required : false)
+if not python.found()
+  python = find_program('python', required : false)
+endif
+
 pkgconfig = import('pkgconfig')
 
 if cc.get_id() == 'msvc'
@@ -132,10 +157,32 @@ if cc.get_id() == 'msvc'
       add_project_arguments('-Dsnprintf=_snprintf', language: 'c')
     endif
   endif
-  if cc.has_header_symbol('malloc.h', '_alloca')
-    add_project_arguments('-Dalloca=_alloca', language: 'c')
-  endif
 endif
+
+# Shared configuration data for copyright date and version
+_cdata = configuration_data()
+_cdata.set('PACKAGE_VERSION', meson.project_version())
+# Use a small C program for cross-platform date formatting (no Python/date dependency)
+# Reads SOURCE_DATE_EPOCH for reproducible builds, falls back to current time
+copyright_prog = '''
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+int main(void) {
+    const char *env = getenv("SOURCE_DATE_EPOCH");
+    time_t epoch = env ? (time_t)atoll(env) : time(NULL);
+    struct tm tm = *gmtime(&epoch);
+    char buf[32];
+    strftime(buf, sizeof(buf), "%B %Y", &tm);
+    puts(buf);
+    return 0;
+}
+'''
+copyright_cmd = build_cc.run(copyright_prog)
+copyright_date = copyright_cmd.stdout().strip()
+_cdata.set('COPYRIGHT_MONTH', copyright_date.split()[0])
+_cdata.set('COPYRIGHT_YEAR', copyright_date.split()[1])
 
 subdir('include')
 subdir('src')

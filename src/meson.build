@@ -1,9 +1,21 @@
 psl_make_dafsa = files('psl-make-dafsa')
 
-suffixes_dafsa_h = custom_target('suffixes_dafsa.h',
-  input : psl_file,
-  output : 'suffixes_dafsa.h',
-  command : [python, psl_make_dafsa, '--output-format=cxx+', '@INPUT@', '@OUTPUT@'])
+fs = import('fs')
+suffixes_dafsa_h_src = join_paths(meson.current_source_dir(), 'suffixes_dafsa.h')
+has_suffixes_dafsa_h = fs.exists(suffixes_dafsa_h_src)
+
+if has_suffixes_dafsa_h
+  suffixes_dafsa_h = suffixes_dafsa_h_src
+else
+  if not python.found()
+    error('Python is required to build suffixes_dafsa.h. Install python or provide suffixes_dafsa.h in src/')
+  endif
+
+  suffixes_dafsa_h = custom_target('suffixes_dafsa.h',
+    input : psl_file,
+    output : 'suffixes_dafsa.h',
+    command : [python, psl_make_dafsa, '--output-format=cxx+', '@INPUT@', '@OUTPUT@'])
+endif
 
 sources = [
   'lookup_string_in_fixed_set.c',
@@ -37,7 +49,8 @@ endif
 libpsl = library('psl', sources, suffixes_dafsa_h,
   include_directories : [configinc, includedir],
   c_args : cargs,
-  dependencies : [libidn2_dep, libidn_dep, libicu_dep, libunistring, networking_deps, libiconv_dep],
+  dependencies : [libidn2_dep, libidn_dep, libicu_dep, libicucore_dep, libicu_win_dep, libunistring, networking_deps, libiconv_dep],
+  gnu_symbol_visibility: 'hidden',
   version: library_version,
   install: true,
   link_language : link_language
@@ -51,8 +64,6 @@ pkgconfig.generate(libpsl,
 libpsl_dep = declare_dependency(link_with : libpsl,
   include_directories : includedir,
   compile_args : interface_cargs)
-
-meson.override_dependency('libpsl', libpsl_dep)
 
 install_data('psl-make-dafsa', install_dir : get_option('bindir'))
 install_man('psl-make-dafsa.1')

@@ -1,30 +1,11 @@
 /*
- * Copyright(c) 2014-2018 Tim Ruehsen
+ * SPDX-License-Identifier: MIT
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * See the LICENSE file in the root directory for details and copyrights.
  *
  * This file is part of libpsl.
  *
  * Public Suffix List routines
- *
- * Changelog
- * 19.03.2014  Tim Ruehsen  created from libmget/cookie.c
  *
  */
 
@@ -38,22 +19,39 @@
 #       define GCC_VERSION_AT_LEAST(major, minor) 0
 #endif
 
-#if GCC_VERSION_AT_LEAST(2,95)
-#  define PSL_UNUSED __attribute__ ((unused))
-#else
-#  define PSL_UNUSED
+/* Must be defined before <sys/stat.h> */
+#if defined(_MSC_VER) || defined(__MINGW32__)
+# define USE_WIN32_LARGE_FILES
+# ifdef __MINGW32__
+#   ifndef _FILE_OFFSET_BITS
+#    define _FILE_OFFSET_BITS 64
+#   endif
+# endif
 #endif
 
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#ifdef _WIN32
-# include <winsock2.h>
-# include <ws2tcpip.h>
-#else
-# include <sys/socket.h>
-# include <netinet/in.h>
-# include <unistd.h>
+#if defined(_WIN32) && (defined(WITH_LIBIDN2) || defined(WITH_LIBIDN))
+# ifndef WIN32_LEAN_AND_MEAN
+# define WIN32_LEAN_AND_MEAN
+# endif
+# include <windows.h> /* for GetACP() */
+#endif
+
+#if defined(_WIN32)
+# ifdef USE_WIN32_LARGE_FILES
+#  define struct_stat  struct _stati64
+#  define func_sys_stat _stati64
+# else
+#  define struct_stat  struct _stat
+#  define func_sys_stat _stat
+# endif
+#endif
+
+#ifndef struct_stat
+# define struct_stat   struct stat
+# define func_sys_stat stat
 #endif
 
 #if defined(_MSC_VER) && ! defined(ssize_t)
@@ -64,9 +62,6 @@ typedef SSIZE_T ssize_t;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifdef HAVE_STRINGS_H
-# include <strings.h>
-#endif
 #include <ctype.h>
 #include <time.h>
 #include <errno.h>
@@ -76,12 +71,8 @@ typedef SSIZE_T ssize_t;
 # include <langinfo.h>
 #endif
 
-#ifndef _WIN32
-# include <arpa/inet.h>
-#endif
-
-#ifdef HAVE_ALLOCA_H
-#	include <alloca.h>
+#ifdef _WIN32
+#	include <malloc.h>
 #endif
 
 #ifdef WITH_LIBICU
@@ -89,6 +80,13 @@ typedef SSIZE_T ssize_t;
 #	include <unicode/ustring.h>
 #	include <unicode/uidna.h>
 #	include <unicode/ucnv.h>
+#elif defined(WITH_LIBICUCORE)
+#	include <iconv.h>
+#	include <unicode/uversion.h>
+#	include <unicode/ustring.h>
+#	include <unicode/uidna.h>
+#elif defined(WITH_LIBICU_WIN)
+# include <icu.h>
 #elif defined(WITH_LIBIDN2)
 #	include <iconv.h>
 #	include <idn2.h>
@@ -102,9 +100,13 @@ typedef SSIZE_T ssize_t;
 #	include <unistr.h>
 #endif
 
-#ifndef WINICONV_CONST
-#  define WINICONV_CONST
+#ifdef WINICONV_CONST
+#  define ICONV_CONST WINICONV_CONST
 #endif
+#ifndef ICONV_CONST
+#  define ICONV_CONST
+#endif
+
 
 #include <libpsl.h>
 
@@ -291,7 +293,7 @@ static int suffix_compare(const psl_entry_t *s1, const psl_entry_t *s2)
 	if ((n = s1->length - s2->length))
 		return n;  /* shorter rules first */
 
-	return strcmp(s1->label ? s1->label : s1->label_buf, s2->label ? s2->label : s2->label_buf);
+	return strncmp(s1->label ? s1->label : s1->label_buf, s2->label ? s2->label : s2->label_buf, s1->length);
 }
 
 /* needed to sort array of pointers, given to qsort() */
@@ -327,7 +329,15 @@ static int suffix_init(psl_entry_t *suffix, const char *rule, size_t length)
 	return 0;
 }
 
-#if !defined(WITH_LIBIDN) && !defined(WITH_LIBIDN2) && !defined(WITH_LIBICU)
+static char *psl_strdup(const char *s)
+{
+	char *p = malloc(strlen(s) + 1);
+	if (!p)
+		return NULL;
+	return strcpy(p, s);
+}
+
+#if !defined(WITH_LIBIDN) && !defined(WITH_LIBIDN2) && !defined(WITH_LIBICU) && !defined(WITH_LIBICUCORE) && !defined(WITH_LIBICU_WIN)
 /*
  * When configured without runtime IDNA support (./configure --disable-runtime), we need a pure ASCII
  * representation of non-ASCII characters in labels as found in UTF-8 domain names.
@@ -542,7 +552,7 @@ static ssize_t utf8_to_utf32(const char *in, size_t inlen, punycode_uint *out, s
 		} else if (inleft >= 4 && (*s & 0xF8) == 0xF0) /* 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx */ {
 			if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80)
 				return -1;
-			out[n++] = ((*s & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+			out[n++] = ((*s & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
 			s += 4;
 		} else if (!inleft) {
 			break;
@@ -590,7 +600,7 @@ static int domain_to_punycode(const char *domain, char *out, size_t outsize)
 			memcpy(out + outlen, "xn--", 4);
 			outlen += 4;
 
-			labellen = outsize - outlen - (e != NULL) - 1; // -1 to leave space for the trailing \0
+			labellen = outsize - outlen - (e != NULL) - 1; /* -1 to leave space for the trailing \0 */
 			if (punycode_encode(inputlen, input, &labellen, out + outlen))
 				return 1;
 			outlen += labellen;
@@ -661,26 +671,30 @@ typedef void *psl_idna_t;
 
 static psl_idna_t *psl_idna_open(void)
 {
-#if defined(WITH_LIBICU)
+#if defined(WITH_LIBICU) || defined(WITH_LIBICUCORE) || defined(WITH_LIBICU_WIN)
 	UErrorCode status = 0;
 	return (void *)uidna_openUTS46(UIDNA_USE_STD3_RULES | UIDNA_NONTRANSITIONAL_TO_ASCII, &status);
 #endif
 	return NULL;
 }
 
-static void psl_idna_close(psl_idna_t *idna PSL_UNUSED)
+static void psl_idna_close(psl_idna_t *idna)
 {
-#if defined(WITH_LIBICU)
+	(void) idna;
+
+#if defined(WITH_LIBICU) || defined(WITH_LIBICUCORE) || defined(WITH_LIBICU_WIN)
 	if (idna)
 		uidna_close((UIDNA *)idna);
 #endif
 }
 
-static int psl_idna_toASCII(psl_idna_t *idna PSL_UNUSED, const char *utf8, char **ascii)
+static int psl_idna_toASCII(psl_idna_t *idna, const char *utf8, char **ascii)
 {
 	int ret = -1;
 
-#if defined(WITH_LIBICU)
+#if defined(WITH_LIBICU) || defined(WITH_LIBICUCORE) || defined(WITH_LIBICU_WIN)
+	(void) idna;
+
 	/* IDNA2008 UTS#46 punycode conversion */
 	if (idna) {
 		char lookupname_buf[128] = "", *lookupname = lookupname_buf;
@@ -719,7 +733,7 @@ static int psl_idna_toASCII(psl_idna_t *idna PSL_UNUSED, const char *utf8, char 
 
 			lookupname[bytes_written] = 0; /* u_strToUTF8() doesn't 0-terminate if dest is filled up */
 		} else {
-			if (!(lookupname = strdup(lookupname)))
+			if (!(lookupname = psl_strdup(lookupname)))
 				goto cleanup;
 		}
 
@@ -739,6 +753,8 @@ cleanup:
 #elif defined(WITH_LIBIDN2)
 #if IDN2_VERSION_NUMBER >= 0x00140000
 	int rc;
+
+	(void) idna;
 
 	/* IDN2_TRANSITIONAL automatically converts to lowercase
 	 * IDN2_NFC_INPUT converts to NFC before toASCII conversion
@@ -772,6 +788,8 @@ cleanup:
 #elif defined(WITH_LIBIDN)
 	int rc;
 
+	(void) idna;
+
 	if (!utf8_is_valid(utf8)) {
 		/* fprintf(stderr, "Invalid UTF-8 sequence not converted: '%s'\n", utf8); */
 		return -1;
@@ -786,9 +804,11 @@ cleanup:
 #else
 	char lookupname[128];
 
+	(void) idna;
+
 	if (domain_to_punycode(utf8, lookupname, sizeof(lookupname)) == 0) {
 		if (ascii)
-			if ((*ascii = strdup(lookupname)))
+			if ((*ascii = psl_strdup(lookupname)))
 				ret = 0;
 	}
 #endif
@@ -828,17 +848,24 @@ static int is_public_suffix(const psl_ctx_t *psl, const char *domain, int type)
 	psl_entry_t suffix;
 	const char *p;
 	char *punycode = NULL;
+	size_t domain_len;
 	int need_conversion = 0;
 
 	/* this function should be called without leading dots, just make sure */
 	if (*domain == '.')
 		domain++;
 
+	/* a single leading dot needs to be handled here, so that e.g.,
+	 * co.uk and co.uk. are both detected as publicsuffix */
+	domain_len = strlen(domain);
+	if (domain_len > 0 && domain[domain_len - 1] == '.')
+		domain_len--;
+
 	suffix.nlabels = 1;
 
-	for (p = domain; *p; p++) {
+	for (p = domain; p < domain + domain_len; p++) {
 		if (*p == '.') {
-			if (suffix.nlabels == 255) // weird input, avoid 8bit overflow
+			if (suffix.nlabels == 255) /* weird input, avoid 8bit overflow */
 				return 0;
 			suffix.nlabels++;
 		}
@@ -868,13 +895,13 @@ static int is_public_suffix(const psl_ctx_t *psl, const char *domain, int type)
 			/* fallback */
 
 			suffix.label = domain;
-			suffix.length = p - suffix.label;
+			suffix.length = domain_len;
 		}
 
 		psl_idna_close(idna);
 	} else {
 		suffix.label = domain;
-		suffix.length = p - suffix.label;
+		suffix.length = domain_len;
 	}
 
 	if (psl == &builtin_psl || psl->dafsa) {
@@ -1243,6 +1270,10 @@ psl_ctx_t *psl_load_fp(FILE *fp)
 	 *  as of 07.10.2018, the list at https://publicsuffix.org/list/ contains ~8600 rules and 8 exceptions.
 	 */
 	psl->suffixes = vector_alloc(8*1024, suffix_compare_array);
+	if (!psl->suffixes) {
+		psl_idna_close(idna);
+		goto fail;
+	}
 	psl->utf8 = 1; /* we put UTF-8 and punycode rules in the lookup vector */
 
 	do {
@@ -1332,7 +1363,7 @@ fail:
  * psl_free:
  * @psl: PSL context pointer
  *
- * This function frees the the PSL context that has been retrieved via
+ * This function frees the PSL context that has been retrieved via
  * psl_load_fp() or psl_load_file().
  *
  * Since: 0.1
@@ -1505,9 +1536,9 @@ const char *psl_builtin_filename(void)
  */
 int psl_builtin_outdated(void)
 {
-	struct stat st;
+	struct_stat st;
 
-	if (stat(_psl_filename, &st) == 0 && st.st_mtime > _psl_file_time)
+	if (func_sys_stat(_psl_filename, &st) == 0 && st.st_mtime > _psl_file_time)
 		return 1;
 
 	return 0;
@@ -1543,6 +1574,10 @@ const char *psl_get_version(void)
 {
 #ifdef WITH_LIBICU
 	return PACKAGE_VERSION " (+libicu/" U_ICU_VERSION ")";
+#elif defined(WITH_LIBICUCORE)
+	return PACKAGE_VERSION " (+libicucore/" U_ICU_VERSION ")";
+#elif defined(WITH_LIBICU_WIN)
+	return PACKAGE_VERSION " (+icu.lib/Windows)";
 #elif defined(WITH_LIBIDN2)
 	return PACKAGE_VERSION " (+libidn2/" IDN2_VERSION ")";
 #elif defined(WITH_LIBIDN)
@@ -1582,30 +1617,90 @@ int psl_check_version_number(int version)
 
 	return PSL_VERSION_NUMBER;
 }
+/*
+ * Return true if 'src' is a valid dotted quad, else false.
+ * Assume that characters '0'..'9' have consecutive byte values.
+ * credit:
+ *	  inspired by Paul Vixie
+ */
+static int is_ip4(const char *s)
+{
+	int i, n;
+	unsigned char c;
+
+	for (i = 0; i < 4; i++) {
+		if (!(c = *s++) || c < '0' || c > '9')
+			return 0;
+
+		n = c - '0';
+		if ((c = *s++) && c >= '0' && c <= '9') {
+			n = n * 10 + c - '0';
+			if ((c = *s++) && c >= '0' && c <= '9') {
+				n = n * 10 + c - '0';
+				if ((c = *s++) && c >= '0' && c <= '9') {
+					n = n * 10 + c - '0';
+					c = *s++;
+				}
+			}
+		}
+
+		if (n > 255)
+			return 0;
+
+		if (i < 3 && c != '.')
+			return 0;
+	}
+
+	return !c;
+}
+
+static int hexval(unsigned c)
+{
+	if (c - '0' < 10) return c - '0';
+	c |= 32;
+	if (c - 'a' < 6) return c - 'a' + 10;
+	return -1;
+}
+
+/*
+ * Original code taken from musl inet_pton(),
+ *   which has a standard MIT license (https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT).
+ * Amended and simplified to out needs.
+ */
+static int is_ip6(const char *s)
+{
+	int i, j, n, d, brk = -1, need_v4 = 0;
+
+	if (*s == ':' && *++s != ':') return 0;
+
+	for (i = 0; ; i++) {
+		if (s[0] == ':' && brk < 0) {
+			brk = i;
+			if (!*++s) break;
+			continue;
+		}
+		for (n = j = 0; j < 4 && (d = hexval(s[j])) >= 0; j++)
+			n = n * 16 + d;
+		if (j == 0) return 0;
+		if (!s[j] && (brk >= 0 || i == 7)) break;
+		if (i == 7) return 0;
+		if (s[j] != ':') {
+			if (s[j] != '.' || (i < 6 && brk < 0)) return 0;
+			need_v4 = 1;
+			i++;
+			break;
+		}
+		s += j + 1;
+	}
+
+	if (need_v4 && !is_ip4(s)) return 0;
+	return 1;
+}
 
 /* return whether hostname is an IP address or not */
 static int isip(const char *hostname)
 {
-#ifdef _WIN32
-	WCHAR wName[INET6_ADDRSTRLEN+1];
-
-	struct sockaddr_in  addr  = {0};
-	struct sockaddr_in6 addr6 = {0};
-
-	INT size  = sizeof(addr);
-	INT size6 = sizeof(addr6);
-
-	if (!MultiByteToWideChar(CP_UTF8, 0, hostname, -1, wName, countof(wName)))
-		return 0;
-
-	return (WSAStringToAddressW(wName, AF_INET,  NULL, (struct sockaddr *)&addr,  &size) != SOCKET_ERROR) |
-	       (WSAStringToAddressW(wName, AF_INET6, NULL, (struct sockaddr *)&addr6, &size6) != SOCKET_ERROR);
-#else
-	struct in_addr addr;
-	struct in6_addr addr6;
-
-	return inet_pton(AF_INET, hostname, &addr) || inet_pton(AF_INET6, hostname, &addr6);
-#endif
+	return is_ip4(hostname) || is_ip6(hostname);
 }
 
 /**
@@ -1688,6 +1783,94 @@ void psl_free_string(char *str)
 		free(str);
 }
 
+#if defined(WITH_LIBIDN2) || defined(WITH_LIBIDN) || defined(WITH_LIBICUCORE)
+/* Avoid using strcasecmp() or _stricmp() */
+static int isUTF8(const char *s) {
+	return (s[0] == 'u' || s[0] == 'U')
+		&& (s[1] == 't' || s[1] == 'T')
+		&& (s[2] == 'f' || s[2] == 'F')
+		&& s[3] == '-' && s[4] == 0;
+}
+
+static char *idn_u8_tolower(const char *buf, size_t len, const char *locale)
+{
+#if defined(WITH_LIBICUCORE)
+	if (len > INT_MAX)
+		return NULL;
+
+	int32_t src_len = (int32_t)len;
+	if (src_len > 0 && buf[src_len - 1] == 0)
+		src_len--;
+
+	UErrorCode status = U_ZERO_ERROR;
+	int32_t utf16_src_len;
+	u_strFromUTF8(NULL, 0, &utf16_src_len, buf, src_len, &status);
+	if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR)
+		return NULL;
+
+	UChar *utf16_src = malloc((size_t)utf16_src_len * sizeof(UChar));
+	if (!utf16_src)
+		return NULL;
+
+	status = U_ZERO_ERROR;
+	u_strFromUTF8(utf16_src, utf16_src_len, NULL, buf, src_len, &status);
+	if (U_FAILURE(status)) {
+		free(utf16_src);
+		return NULL;
+	}
+
+	status = U_ZERO_ERROR;
+	int32_t utf16_lower_len = u_strToLower(NULL, 0, utf16_src, utf16_src_len, locale, &status);
+	if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR) {
+		free(utf16_src);
+		return NULL;
+	}
+
+	UChar *utf16_lower = malloc((size_t)utf16_lower_len * sizeof(UChar));
+	if (!utf16_lower) {
+		free(utf16_src);
+		return NULL;
+	}
+
+	status = U_ZERO_ERROR;
+	u_strToLower(utf16_lower, utf16_lower_len, utf16_src, utf16_src_len, locale, &status);
+	free(utf16_src);
+	if (U_FAILURE(status)) {
+		free(utf16_lower);
+		return NULL;
+	}
+
+	status = U_ZERO_ERROR;
+	int32_t utf8_lower_len;
+	u_strToUTF8(NULL, 0, &utf8_lower_len, utf16_lower, utf16_lower_len, &status);
+	if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR) {
+		free(utf16_lower);
+		return NULL;
+	}
+
+	char *result = malloc((size_t)utf8_lower_len + 1);
+	if (!result) {
+		free(utf16_lower);
+		return NULL;
+	}
+
+	status = U_ZERO_ERROR;
+	u_strToUTF8(result, utf8_lower_len + 1, NULL, utf16_lower, utf16_lower_len, &status);
+	free(utf16_lower);
+	if (U_FAILURE(status)) {
+		free(result);
+		result = NULL;
+	}
+
+	return result;
+#else
+	(void) locale;
+
+	return (char *)u8_tolower((uint8_t *)buf, len, 0, UNINORM_NFKC, NULL, &len);
+#endif
+}
+#endif
+
 /**
  * psl_str_to_utf8lower:
  * @str: string to convert
@@ -1713,9 +1896,12 @@ void psl_free_string(char *str)
  *
  * Since: 0.4
  */
-psl_error_t psl_str_to_utf8lower(const char *str, const char *encoding PSL_UNUSED, const char *locale PSL_UNUSED, char **lower)
+psl_error_t psl_str_to_utf8lower(const char *str, const char *encoding, const char *locale, char **lower)
 {
 	int ret = PSL_ERR_INVALID_ARG;
+
+	(void) encoding;
+	(void) locale;
 
 	if (!str)
 		return PSL_ERR_INVALID_ARG;
@@ -1725,7 +1911,7 @@ psl_error_t psl_str_to_utf8lower(const char *str, const char *encoding PSL_UNUSE
 		if (lower) {
 			char *p, *tmp;
 
-			if (!(tmp = strdup(str)))
+			if (!(tmp = psl_strdup(str)))
 				return PSL_ERR_NO_MEM;
 
 			*lower = tmp;
@@ -1738,24 +1924,32 @@ psl_error_t psl_str_to_utf8lower(const char *str, const char *encoding PSL_UNUSE
 		return PSL_SUCCESS;
 	}
 
-#ifdef WITH_LIBICU
+#if defined(WITH_LIBICU) || defined(WITH_LIBICU_WIN)
+#define STACK_STRLENGTH 256
 	do {
-	size_t str_length = strlen(str);
 	UErrorCode status = 0;
 	UChar *utf16_dst, *utf16_lower;
-	int32_t utf16_dst_length;
 	char *utf8_lower;
+	int32_t utf16_dst_length, utf16_dst_size, utf16_lower_size, utf8_lower_size;
 	UConverter *uconv;
+	UChar utf16_dst_buf[STACK_STRLENGTH * 2 + 1];
+	UChar utf16_lower_buf[STACK_STRLENGTH * 2 + 1];
+	char utf8_lower_buf[STACK_STRLENGTH * 6 + 1];
+	size_t str_length = strlen(str);
 
-	if (str_length < 256) {
-		/* C89 allocation */
-		utf16_dst   = alloca(sizeof(UChar) * (str_length * 2 + 1));
-		utf16_lower = alloca(sizeof(UChar) * (str_length * 2 + 1));
-		utf8_lower  = alloca(str_length * 6 + 1);
+	if (str_length <= STACK_STRLENGTH) {
+		utf16_dst_size = countof(utf16_dst_buf);
+		utf16_lower_size = countof(utf16_lower_buf);
+		utf8_lower_size = countof(utf8_lower_buf);
+		utf16_dst   = utf16_dst_buf;
+		utf16_lower = utf16_lower_buf;
+		utf8_lower  = utf8_lower_buf;
 	} else {
-		utf16_dst   = malloc(sizeof(UChar) * (str_length * 2 + 1));
-		utf16_lower = malloc(sizeof(UChar) * (str_length * 2 + 1));
-		utf8_lower  = malloc(str_length * 6 + 1);
+		utf16_dst_size = utf16_lower_size = str_length * 2 + 1;
+		utf8_lower_size = str_length * 6 + 1;
+		utf16_dst   = malloc(sizeof(UChar) * utf16_dst_size);
+		utf16_lower = malloc(sizeof(UChar) * utf16_lower_size);
+		utf8_lower  = malloc(sizeof(char) * utf8_lower_size);
 
 		if (!utf16_dst || !utf16_lower || !utf8_lower) {
 			ret = PSL_ERR_NO_MEM;
@@ -1765,17 +1959,17 @@ psl_error_t psl_str_to_utf8lower(const char *str, const char *encoding PSL_UNUSE
 
 	uconv = ucnv_open(encoding, &status);
 	if (U_SUCCESS(status)) {
-		utf16_dst_length = ucnv_toUChars(uconv, utf16_dst, str_length * 2 + 1, str, str_length, &status);
+		utf16_dst_length = ucnv_toUChars(uconv, utf16_dst, utf16_dst_size, str, str_length, &status);
 		ucnv_close(uconv);
 
 		if (U_SUCCESS(status)) {
-			int32_t utf16_lower_length = u_strToLower(utf16_lower, str_length * 2 + 1, utf16_dst, utf16_dst_length, locale, &status);
+			int32_t utf16_lower_length = u_strToLower(utf16_lower, utf16_lower_size, utf16_dst, utf16_dst_length, locale, &status);
 			if (U_SUCCESS(status)) {
-				u_strToUTF8(utf8_lower, str_length * 6 + 1, NULL, utf16_lower, utf16_lower_length, &status);
+				u_strToUTF8(utf8_lower, utf8_lower_size, NULL, utf16_lower, utf16_lower_length, &status);
 				if (U_SUCCESS(status)) {
 					ret = PSL_SUCCESS;
 					if (lower) {
-						char *tmp = strdup(utf8_lower);
+						char *tmp = psl_strdup(utf8_lower);
 
 						if (tmp)
 							*lower = tmp;
@@ -1799,13 +1993,15 @@ psl_error_t psl_str_to_utf8lower(const char *str, const char *encoding PSL_UNUSE
 		/* fprintf(stderr, "Failed to open converter for '%s' (status %d)\n", encoding, status); */
 	}
 out:
-	if (str_length >= 256) {
+	if (utf16_dst != utf16_dst_buf)
 		free(utf16_dst);
+	if (utf16_lower != utf16_lower_buf)
 		free(utf16_lower);
+	if (utf8_lower != utf8_lower_buf)
 		free(utf8_lower);
-	}
+
 	} while (0);
-#elif defined(WITH_LIBIDN2) || defined(WITH_LIBIDN)
+#elif defined(WITH_LIBIDN2) || defined(WITH_LIBIDN) || defined(WITH_LIBICUCORE)
 	do {
 		/* find out local charset encoding */
 		if (!encoding) {
@@ -1821,7 +2017,7 @@ out:
 		}
 
 		/* convert to UTF-8 */
-		if (strcasecmp(encoding, "utf-8")) {
+		if (!isUTF8(encoding)) {
 			iconv_t cd = iconv_open("utf-8", encoding);
 
 			if (cd != (iconv_t)-1) {
@@ -1833,7 +2029,7 @@ out:
 				if (!dst) {
 					ret = PSL_ERR_NO_MEM;
 				}
-				else if (iconv(cd, (WINICONV_CONST char **)&tmp, &tmp_len, &dst_tmp, &dst_len_tmp) != (size_t)-1
+				else if (iconv(cd, (ICONV_CONST char **)&tmp, &tmp_len, &dst_tmp, &dst_len_tmp) != (size_t)-1
 					&& iconv(cd, NULL, NULL, &dst_tmp, &dst_len_tmp) != (size_t)-1)
 				{
 					/* start size for u8_tolower internal memory allocation.
@@ -1841,7 +2037,7 @@ out:
 					 * and thus in len. */
 					size_t len = dst_len - dst_len_tmp;
 
-					if ((tmp = (char *)u8_tolower((uint8_t *)dst, len, 0, UNINORM_NFKC, NULL, &len))) {
+					if ((tmp = idn_u8_tolower(dst, len, locale))) {
 						ret = PSL_SUCCESS;
 						if (lower) {
 							*lower = tmp;
@@ -1865,16 +2061,16 @@ out:
 			}
 		} else {
 			/* we need a conversion to lowercase */
-			uint8_t *tmp;
+			char *tmp;
 
 			/* start size for u8_tolower internal memory allocation.
 			 * u8_tolower() does not terminate the result string, so include terminating 0 byte in len. */
-			size_t len = u8_strlen((uint8_t *)str) + 1;
+			size_t len = strlen(str) + 1;
 
-			if ((tmp = u8_tolower((uint8_t *)str, len, 0, UNINORM_NFKC, NULL, &len))) {
+			if ((tmp = idn_u8_tolower(str, len, locale))) {
 				ret = PSL_SUCCESS;
 				if (lower) {
-					*lower = (char*)tmp;
+					*lower = tmp;
 					tmp = NULL;
 				} else
 					free(tmp);
@@ -1893,10 +2089,10 @@ out:
 /* if file is newer than the builtin data, insert it reverse sorted by mtime */
 static int insert_file(const char *fname, const char **psl_fname, time_t *psl_mtime, int n)
 {
-	struct stat st;
+	struct_stat st;
 	int it;
 
-	if (fname && *fname && stat(fname, &st) == 0 && st.st_mtime > _psl_file_time) {
+	if (fname && *fname && func_sys_stat(fname, &st) == 0 && st.st_mtime > _psl_file_time) {
 		/* add file name and mtime to end of array */
 		psl_fname[n] = fname;
 		psl_mtime[n++] = st.st_mtime;
@@ -1917,7 +2113,7 @@ static int insert_file(const char *fname, const char **psl_fname, time_t *psl_mt
  * psl_latest:
  * @fname: Name of PSL file or %NULL
  *
- * This function loads the the latest available PSL data from either
+ * This function loads the latest available PSL data from either
  * - @fname (application specific filename, may be %NULL)
  * - location specified during built-time (filename from ./configure --with-psl-distfile)
  * - built-in PSL data (generated from ./configure --with-psl-file)
